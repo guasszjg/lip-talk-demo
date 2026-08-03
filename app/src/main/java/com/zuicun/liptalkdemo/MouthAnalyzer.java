@@ -12,9 +12,15 @@ public final class MouthAnalyzer {
 
         NormalizedLandmark upperLip = landmarks.get(13);
         NormalizedLandmark lowerLip = landmarks.get(14);
+        NormalizedLandmark upperLeftLip = landmarks.get(82);
+        NormalizedLandmark lowerLeftLip = landmarks.get(87);
+        NormalizedLandmark upperRightLip = landmarks.get(312);
+        NormalizedLandmark lowerRightLip = landmarks.get(317);
         NormalizedLandmark leftCorner = landmarks.get(78);
         NormalizedLandmark rightCorner = landmarks.get(308);
-        float mouthHeight = distance(upperLip, lowerLip);
+        float mouthHeight = distance(upperLip, lowerLip) * 0.50f
+                + distance(upperLeftLip, lowerLeftLip) * 0.25f
+                + distance(upperRightLip, lowerRightLip) * 0.25f;
         float mouthWidth = distance(leftCorner, rightCorner);
         if (mouthWidth < 0.001f) return null;
 

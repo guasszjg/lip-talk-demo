@@ -33,7 +33,10 @@ public final class MultiFaceAnalyzerTest {
     @Test
     public void movingMouthOverridesLargerSilentFaceAndStaysLocked() {
         MultiFaceAnalyzer analyzer = new MultiFaceAnalyzer();
-        float[] openings = {0.05f, 0.08f, 0.17f, 0.07f, 0.22f, 0.06f, 0.19f, 0.07f};
+        float[] openings = {
+                0.05f, 0.08f, 0.17f, 0.07f, 0.22f, 0.06f,
+                0.19f, 0.07f, 0.21f, 0.06f, 0.18f, 0.07f
+        };
         MultiFaceAnalyzer.Analysis result = null;
         long time = 0L;
         for (float opening : openings) {
@@ -81,6 +84,14 @@ public final class MultiFaceAnalyzerTest {
                 centerX, centerY - mouthHeight / 2f, 0f));
         points.set(14, NormalizedLandmark.create(
                 centerX, centerY + mouthHeight / 2f, 0f));
+        points.set(82, NormalizedLandmark.create(
+                centerX - mouthWidth * 0.20f, centerY - mouthHeight / 2f, 0f));
+        points.set(87, NormalizedLandmark.create(
+                centerX - mouthWidth * 0.20f, centerY + mouthHeight / 2f, 0f));
+        points.set(312, NormalizedLandmark.create(
+                centerX + mouthWidth * 0.20f, centerY - mouthHeight / 2f, 0f));
+        points.set(317, NormalizedLandmark.create(
+                centerX + mouthWidth * 0.20f, centerY + mouthHeight / 2f, 0f));
         return points;
     }
 }

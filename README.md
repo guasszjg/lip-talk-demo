@@ -1,6 +1,6 @@
 # Note9 端侧嘴部运动与多人目标选择 Demo
 
-这是一个使用 Java 编写的 Android 端侧视觉验证项目，运行在三星 Note9（Android 10）上。项目通过 CameraX 获取前置摄像头画面，使用 Google MediaPipe Face Landmarker 提取人脸关键点，再通过自研的嘴部几何特征、连续帧统计和多人目标选择逻辑，判断画面中的目标是否存在持续嘴部运动。
+这是一个使用 Java 编写的 Android 端侧视觉验证项目，可运行在三星 Note9（Android 10）和 RK3576 ARM64 Android 设备上。项目通过 CameraX 获取前置摄像头画面，在普通 Android 设备上使用 Google MediaPipe Face Landmarker，在 RK3576 上优先使用 RKNN NPU 人脸检测与关键点模型，再通过自研的嘴部几何特征、连续帧统计和多人目标选择逻辑，判断画面中的目标是否存在持续嘴部运动。
 
 项目当前定位是：
 
@@ -14,28 +14,39 @@
 - MediaPipe 478 点三维人脸关键点检测。
 - 单人高性能、多人检测两种运行模式。
 - 右上角按钮可实时切换模式，并记住上次选择。
+- 顶部可在 CPU 与 GPU 推理后端之间切换，GPU 初始化失败时自动回退 CPU。
+- 状态卡同时显示当前帧延迟和最近 30 帧平均延迟，便于对比 CPU/GPU。
+- 状态卡独立显示嘴巴连续帧状态：采样中、静止、确认中或运动中。
+- 可选 InsightFace 外观年龄/性别研究模型：只分析当前目标，每 1 秒更新并对最近 7 次高质量结果平滑；点击紫色属性条可开关。
+- 支持设置多个主人（管理员）：可使用当前摄像头或相册中的单人照片注册，并可单独删除或全部清除。
+- 提供独立管理员管理页面，显示加密保存的头像、姓名和注册时间；提供带人脸取景框的专用前置摄像头拍照页面。
+- 管理员头像及 512 维归一化人脸特征使用 Android Keystore AES-GCM 加密后保存在应用私有目录。
+- 实时画面会低频检查所有已跟踪人脸，连续两次匹配且与第二候选差距足够时才标记主人姓名。
+- 主界面确认管理员后使用金色粗人脸轮廓和金色姓名标签，与普通访客明显区分。
 - 使用系统 WindowInsets 处理状态栏和导航栏安全区，底部信息不会被系统导航栏遮挡。
 - 使用边缘相机画面、渐变遮罩和半透明圆角状态卡呈现实时结果。
 - 多人模式最多同时检测 4 张脸。
-- 为每张脸建立短时跟踪编号，但不做人脸身份识别。
+- 为每张脸建立短时跟踪编号，并可选择性地与本机已注册主人进行 1:N 特征匹配。
 - 为每张脸独立计算嘴部开合度和连续运动量。
 - 无明显嘴部运动时，优先选择面积较大、靠近画面中心的人。
 - 出现持续嘴部运动时，临时锁定对应目标，减少多人场景中目标跳动。
 - 在画面上绘制人脸轮廓、嘴唇轮廓、目标编号和实时延迟。
 - 摄像头数据在设备本地处理，不需要把视频上传到业务服务器。
 - APK 仅打包 `arm64-v8a`，适用于 Note9，也与 RK3576 的 ARM64 架构一致。
+- RK3576 自动优先启用四个 FP16 RKNN 模型；模型或 NPU Runtime 初始化失败时自动回退 MediaPipe/ONNX CPU。
 
 ## 2. 这个项目不具备的能力
 
 当前版本不包含以下能力：
 
-- 不识别人的身份，不保存人脸特征向量。
+- 主人识别是测试性质的相似度匹配，不具备活体检测，不能用于支付、门禁或高风险身份认证。
 - 不识别用户说了什么，不是唇语识别。
 - 不根据嘴型还原语音内容。
 - 不区分说话、打哈欠、吃东西、咀嚼和夸张微笑。
 - 不使用麦克风，因此无法确认嘴动时是否真的有声音。
 - 多人编号仅在短时间、相邻帧内有效，离开画面后重新进入可能获得新编号。
 - 不适用于安防、医疗、生命安全或身份认证决策。
+- 年龄是外观年龄段估计，性别是二分类模型输出，均不代表真实人口属性；模型可能受姿态、光照、眼镜和训练数据偏差影响。
 
 产品界面中应使用“嘴部正在运动”或“疑似讲话”，不要把纯视觉结果直接表述为“确认正在讲话”。
 
@@ -46,10 +57,10 @@ CameraX 前置摄像头
         │
         │ RGBA 视频帧，保留最新帧
         ▼
-MediaPipe Face Landmarker
+FaceLandmarkerEngine
         │
-        ├── 人脸检测
-        ├── 人脸跟踪
+        ├── 普通 Android：MediaPipe CPU / GPU
+        ├── RK3576：RKNN NPU Detector + 478 点 Landmarks
         └── 每张脸 478 个三维关键点
                  │
                  ▼
@@ -62,6 +73,10 @@ MediaPipe Face Landmarker
                  └── 主目标选择与锁定
                          │
                          ├── FaceOverlayView 可视化
+                         ├── 可选 AgeGenderEngine
+                         │       ├── 当前目标按五点模板对齐为 96 × 96
+                         │       ├── RK3576 RKNN NPU / 其他设备 ONNX CPU
+                         │       └── 7 次鲁棒平滑与年龄分段
                          └── 后续接入 VAD / ASR / Agent
 ```
 
@@ -69,16 +84,19 @@ MediaPipe Face Landmarker
 
 ## 4. 技术栈与版本
 
-| 组件                     | 当前配置                | 用途                          |
-| ---------------------- | -------------------:| --------------------------- |
-| Java                   | 17                  | Android 业务与算法代码             |
-| Android minSdk         | 26                  | 最低 Android 8.0              |
-| Android targetSdk      | 35                  | 应用目标版本                      |
-| CameraX                | 1.4.2               | 摄像头预览和逐帧分析                  |
-| MediaPipe Tasks Vision | 0.10.29             | Face Landmarker Android API |
-| Face Landmarker 模型     | float16 / version 1 | 人脸检测和 478 点关键点              |
-| ABI                    | arm64-v8a           | Note9、RK3576 ARM64          |
-| 推理 Delegate            | CPU                 | 当前 Note9 Demo 使用 CPU        |
+| 组件                     | 当前配置                  | 用途                          |
+| ---------------------- | ---------------------:| --------------------------- |
+| Java                   | 17                    | Android 业务与算法代码             |
+| Android minSdk         | 26                    | 最低 Android 8.0              |
+| Android targetSdk      | 35                    | 应用目标版本                      |
+| CameraX                | 1.4.2                 | 摄像头预览和逐帧分析                  |
+| MediaPipe Tasks Vision | 0.10.29               | Face Landmarker Android API |
+| ONNX Runtime Android   | 1.27.0                | 可选年龄/性别 ONNX 推理             |
+| RKNN Runtime           | Toolkit/Runtime 2.3.2 | RK3576 NPU 推理与 JNI 接入          |
+| Face Landmarker 模型     | float16 / version 1   | 人脸检测和 478 点关键点              |
+| InsightFace Gender&Age | MobileNet-0.25 / ONNX | 本地非商用研究验证                   |
+| ABI                    | arm64-v8a             | Note9、RK3576 ARM64          |
+| 推理后端                  | CPU / GPU / RKNN NPU  | RK3576 自动优先 NPU                |
 
 项目中的 Android 业务代码全部为 Java。`build.gradle.kts` 和 `settings.gradle.kts` 是 Gradle 构建配置，不是 Kotlin 应用源码。
 
@@ -124,7 +142,7 @@ https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/
 
 | 内部模型          | 输入规格        | 输出         |
 | ------------- | -----------:| ---------- |
-| Face Detector | 192 × 192   | 人脸位置和粗关键点  |
+| Face Detector | 128 × 128   | 人脸位置和粗关键点  |
 | FaceMesh-V2   | 256 × 256   | 478 个三维关键点 |
 | Blendshape    | 1 × 146 × 2 | 52 个表情系数   |
 
@@ -146,12 +164,69 @@ Google 当前的 MediaPipe 隐私说明表示，任务输入在设备端处理�
 
 当前依赖固定为 `tasks-vision:0.10.29` 以保证 Demo 可复现，并不代表这是长期产品应使用的最终版本。升级依赖或模型前需要重新做精度、性能、ABI、隐私和回归测试。官方目前仍把 Face Landmarker 标记为 Preview，接口与行为存在演进可能。
 
+### 5.4 可选 InsightFace 年龄/性别模型
+
+本地验证使用 InsightFace 官方 `buffalo_s` 模型包中的 `genderage.onnx`：
+
+```text
+https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_s.zip
+```
+
+模型输入为 `1 × 3 × 96 × 96` 原始 RGB，网络内部已包含减均值和缩放节点；输出为两个性别分类值和一个归一化年龄估计。项目不运行完整 `buffalo_s`，也不做人脸识别，只加载约 1.32 MB 的 `genderage.onnx`。代码位于 `AgeGenderEngine.java`。
+
+本次本地验证文件为 1,322,532 bytes，SHA-256 为 `4FDE69B1C810857B88C64A335084F1C3FE8F01246C9A191B48C7BB756D6652FB`，便于确认测试权重一致。
+
+由于官方预训练模型权重仅限非商业研究，本仓库通过 `.gitignore` 排除：
+
+```text
+app/src/main/assets/genderage.onnx
+```
+
+若只进行本地技术验证，可自行下载 `buffalo_s.zip`，仅提取 `genderage.onnx` 到上述目录。文件缺失不会导致项目编译失败，应用会显示“属性估计：模型未安装”，原有嘴部检测仍可使用。不要把该权重提交到公开仓库或用于广告机商业发布。正式产品应取得 InsightFace 商业授权，或替换为具有明确商业许可、经过自有场景评测的属性模型。参考：[InsightFace 官方仓库](https://github.com/deepinsight/insightface)和[官方 Python Package 模型包说明](https://github.com/deepinsight/insightface/blob/master/python-package/README.md)。
+
+属性模块采用以下工程策略：
+
+- 复用 MediaPipe 已选中的目标脸，不重复运行人脸检测。
+- 使用双眼虹膜中心、鼻尖和嘴角，将人脸按 InsightFace 五点模板对齐到 96 × 96。
+- 过滤过小、严重侧脸、过暗、低对比度或明显模糊的输入，避免低质量帧污染结果。
+- 目标改变时立即推理，同一目标最多每 1 秒推理一次。
+- 每次属性推理使用原始脸图和水平翻转脸图融合性别结果；年龄只使用五点对齐后的原始脸图，避免年龄回归值因翻转产生标定漂移。最近 7 次年龄使用去极值均值，性别按保留绝对强度的置信度证据融合。
+- 状态卡底部显示版本号、版本代码和 Asia/Shanghai 时区的实际编译时间，便于区分现场安装包。
+- UI 显示十岁年龄段和“模型分类”，不把输出表述为真实年龄或自我认同的性别。
+- RK3576 上属性模型优先走 RKNN NPU，其他设备走 ONNX Runtime CPU；顶部按钮在 RK3576 上显示 `NPU`。
+
+### 5.5 多主人识别研究模型
+
+主人识别使用同一 `buffalo_s` 研究模型包中的 `w600k_mbf.onnx`（MobileFaceNet，
+13,616,099 bytes，SHA-256
+`9CC6E4A75F0E2BF0B1AED94578F144D15175F357BDC05E815E5C4A02B319EB4F`）。
+输入脸按 InsightFace 五点模板对齐到 112 × 112，输出 512 维 L2 归一化特征，
+通过余弦相似度进行 1:N 匹配。该预训练权重同样仅限非商业研究，已被 `.gitignore`
+排除，不应提交到公开仓库或用于正式商业产品。
+
+当前原型匹配阈值为 0.42，并要求同一轨迹连续两次命中；多个候选过于接近时不确认主人。
+阈值必须用目标设备、真实安装距离和实际管理员样本重新标定。该功能没有照片/视频攻击防护，
+不能作为高风险身份认证手段。
+
+### 5.6 RK3576 FP16 模型
+
+本地交付包包含以下目标平台为 `rk3576` 的 FP16 模型：
+
+```text
+face_detector_rk3576_fp16.rknn
+face_landmarks_rk3576_fp16.rknn
+genderage_rk3576_fp16.rknn
+w600k_mbf_rk3576_fp16.rknn
+```
+
+前两个模型从 `face_landmarker.task` 内的 TFLite 子模型提取并转换；后两个从对应 ONNX 模型转换。转换脚本位于 `tools/rknn/`。人脸检测、478 点关键点、年龄/性别和主人特征在 RK3576 上均优先使用 NPU；设备识别、模型加载或 Runtime 初始化失败时保留原有回退链路。FP16 转换已使用 RKNN 模拟器和原模型逐输出比对，但仍需在目标 RK3576 板卡上验证相机方向、驱动/Runtime 兼容性、延迟、温升和长时间稳定性。
+
 ## 6. MediaPipe 推理配置
 
 `FaceLandmarkerEngine.java` 当前使用：
 
 ```java
-.setDelegate(Delegate.CPU)
+.setDelegate(backend == InferenceBackend.GPU ? Delegate.GPU : Delegate.CPU)
 .setRunningMode(RunningMode.LIVE_STREAM)
 .setNumFaces(mode.maximumFaces)
 .setMinFaceDetectionConfidence(0.5f)
@@ -165,6 +240,20 @@ Google 官方文档指出，时间平滑只在 `numFaces = 1` 时启用。因此
 
 - 单人模式的关键点通常更稳定，延迟也更低。
 - 多人模式需要更严格的嘴动阈值，避免关键点抖动造成误触发。
+
+### 6.1 CPU / GPU 推理后端
+
+顶部 `CPU` / `GPU` 按钮可以重建 Face Landmarker 并切换 MediaPipe Delegate。选择会写入 `SharedPreferences`，首次安装默认使用 CPU。GPU Delegate 必须在创建它的推理线程上执行和关闭，因此项目把模型创建、摄像头帧分析和模型释放都放在同一个单线程执行器中。
+
+如果 GPU 初始化失败，应用会自动切回 CPU，并在底部状态卡提示实际后端。CPU 与 GPU 的延迟必须分别在单人和多人模式下实测；GPU 不保证在所有模型、设备或模式下都比 CPU 快。
+
+业务代码也可以调用：
+
+```java
+backendController.setInferenceBackend(InferenceBackend.CPU);
+backendController.setInferenceBackend(InferenceBackend.GPU);
+InferenceBackend current = backendController.getInferenceBackend();
+```
 
 ## 7. 嘴部运动算法
 
@@ -211,6 +300,20 @@ range    = 最大开合度 - 最小开合度
 窗口至少积累 6 帧才开始判断。连续 2 帧满足运动条件后进入“嘴部运动”状态；连续 5 帧不满足后才退出。这种进入/退出使用不同持续时间的方式属于滞回，可以减少界面在临界阈值附近频繁闪烁。
 
 所有阈值都是当前 Demo 的工程初值，不是通用真值。正式产品应使用你们真实广告机场景验证集重新标定。
+
+### 7.5 UI 嘴巴状态
+
+UI 不使用某一帧的张嘴大小直接判断，而是显示连续帧状态：
+
+| UI 状态      | 含义                    |
+| ---------- | --------------------- |
+| `采样 x/6`   | 新目标尚未积累足够连续帧          |
+| `嘴巴：静止 n%` | 已完成采样，活动强度尚未达到阈值      |
+| `嘴巴：确认中`   | 当前运动量达到阈值，等待连续第 2 帧确认 |
+| `嘴巴：运动中`   | 连续帧条件成立，进入稳定嘴动状态      |
+| `嘴巴：等待`    | 当前没有检测到人脸             |
+
+这里的百分比是相对于规则阈值归一化后的“活动强度”，不是神经网络置信度，也不代表正在讲话的概率。
 
 ## 8. 单人和多人模式
 
@@ -295,6 +398,14 @@ app/src/main/java/com/zuicun/liptalkdemo/
 │   ├── 加载 face_landmarker.task
 │   ├── 配置单人/多人模式
 │   └── 异步执行 MediaPipe
+├── AgeGenderEngine.java
+│   ├── 加载可选 genderage.onnx
+│   ├── 目标脸五点对齐、质量过滤、RGB/NCHW 预处理
+│   └── 每 1 秒执行一次 ONNX Runtime CPU 推理
+├── AgeGenderSmoother.java
+│   └── 同一轨迹 7 次年龄去极值均值与性别置信度加权平滑
+├── AttributeDetectionController.java
+│   └── 属性检测开关接口
 ├── DetectionMode.java
 │   └── SINGLE / MULTI 配置
 ├── DetectionModeController.java
@@ -317,8 +428,10 @@ app/src/main/java/com/zuicun/liptalkdemo/
 
 ```text
 app/src/test/java/com/zuicun/liptalkdemo/
+├── AgeGenderSmootherTest.java
 ├── MouthMotionTrackerTest.java
-└── MultiFaceAnalyzerTest.java
+├── MultiFaceAnalyzerTest.java
+└── LatencyTrackerTest.java
 ```
 
 自动测试覆盖稳定闭嘴不触发、连续嘴型变化触发、无人嘴动时选择大脸、较小人脸嘴动时抢占目标以及目标短时锁定。
@@ -333,6 +446,8 @@ app/src/test/java/com/zuicun/liptalkdemo/
 4. USB 连接手机并允许调试授权。
 5. 选择手机后运行 `app`。
 6. 首次启动允许摄像头权限。
+
+如需测试外观属性估计，还需按 5.4 节把研究模型放入本机 assets；只测试嘴部检测时无需该文件。
 
 ### 11.2 命令行
 

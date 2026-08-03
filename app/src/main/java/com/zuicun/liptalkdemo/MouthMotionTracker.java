@@ -5,13 +5,24 @@ import java.util.Deque;
 
 /** Converts a normalized mouth-opening time series into a stable motion decision. */
 public final class MouthMotionTracker {
+    private static final int RECENT_SAMPLE_COUNT = 5;
+    private static final float SMOOTHING_ALPHA = 0.55f;
+    private static final long DEFAULT_FRAME_INTERVAL_MS = 33L;
+    private static final long MAX_FRAME_INTERVAL_MS = 200L;
+    private static final long ENTER_CONFIRM_MS = 120L;
+    private static final long EXIT_CONFIRM_MS = 500L;
+    private static final float HOLD_VELOCITY_RATIO = 0.68f;
+    private static final float HOLD_RANGE_RATIO = 0.68f;
+
     private final int windowSize;
     private final int minimumSamples;
     private final float motionThreshold;
     private final float rangeThreshold;
     private final Deque<Float> values = new ArrayDeque<>();
-    private int positiveFrames;
-    private int negativeFrames;
+    private long enterEvidenceMs;
+    private long quietEvidenceMs;
+    private long lastTimestampMs = -1L;
+    private long syntheticTimestampMs;
     private boolean moving;
 
     public MouthMotionTracker() {
@@ -31,49 +42,120 @@ public final class MouthMotionTracker {
     }
 
     public Reading update(float openness) {
-        values.addLast(Math.max(0f, Math.min(2f, openness)));
+        syntheticTimestampMs += DEFAULT_FRAME_INTERVAL_MS;
+        return update(openness, syntheticTimestampMs);
+    }
+
+    public Reading update(float openness, long timestampMs) {
+        long frameIntervalMs = frameInterval(timestampMs);
+        float clamped = Math.max(0f, Math.min(2f, openness));
+        float smoothingAlpha = timeAdjustedSmoothingAlpha(frameIntervalMs);
+        float filtered = values.isEmpty()
+                ? clamped
+                : values.peekLast() * (1f - smoothingAlpha)
+                        + clamped * smoothingAlpha;
+        values.addLast(filtered);
         if (values.size() > windowSize) {
             values.removeFirst();
         }
 
-        float sum = 0f;
-        float minimum = Float.MAX_VALUE;
-        float maximum = -Float.MAX_VALUE;
+        int skip = Math.max(0, values.size() - RECENT_SAMPLE_COUNT);
+        int index = 0;
+        int recentCount = 0;
+        int deltaCount = 0;
+        float previous = 0f;
+        float absoluteDeltaSum = 0f;
+        float recentMinimum = Float.MAX_VALUE;
+        float recentMaximum = -Float.MAX_VALUE;
         for (float value : values) {
-            sum += value;
-            minimum = Math.min(minimum, value);
-            maximum = Math.max(maximum, value);
-        }
-        float mean = sum / Math.max(1, values.size());
-        float squaredDeltaSum = 0f;
-        for (float value : values) {
-            float delta = value - mean;
-            squaredDeltaSum += delta * delta;
+            if (index++ < skip) continue;
+            recentMinimum = Math.min(recentMinimum, value);
+            recentMaximum = Math.max(recentMaximum, value);
+            if (recentCount > 0) {
+                absoluteDeltaSum += Math.abs(value - previous);
+                deltaCount++;
+            }
+            previous = value;
+            recentCount++;
         }
 
-        float movement = (float) Math.sqrt(squaredDeltaSum / Math.max(1, values.size()));
-        float range = maximum - minimum;
-        boolean rawMoving = values.size() >= minimumSamples
-                && (movement >= motionThreshold || range >= rangeThreshold);
+        float movement = absoluteDeltaSum / Math.max(1, deltaCount);
+        float range = recentMaximum - recentMinimum;
+        boolean ready = values.size() >= minimumSamples;
+        float velocityGate = motionThreshold * 0.70f;
+        float rangeGate = rangeThreshold * 0.45f;
+        boolean startCandidate = ready
+                && movement >= velocityGate
+                && range >= rangeGate;
+        boolean holdCandidate = ready
+                && movement >= velocityGate * HOLD_VELOCITY_RATIO
+                && range >= rangeGate * HOLD_RANGE_RATIO;
+        float activityScore = Math.min(1f, Math.min(
+                movement / velocityGate,
+                range / rangeGate));
 
-        if (rawMoving) {
-            positiveFrames++;
-            negativeFrames = 0;
+        if (!moving) {
+            quietEvidenceMs = 0L;
+            if (startCandidate) {
+                enterEvidenceMs = Math.min(
+                        ENTER_CONFIRM_MS,
+                        enterEvidenceMs + frameIntervalMs);
+            } else {
+                // A single marginal frame should not throw away all accumulated evidence.
+                enterEvidenceMs = Math.max(0L, enterEvidenceMs - frameIntervalMs);
+            }
+            if (enterEvidenceMs >= ENTER_CONFIRM_MS) {
+                moving = true;
+                quietEvidenceMs = 0L;
+            }
         } else {
-            negativeFrames++;
-            positiveFrames = 0;
+            enterEvidenceMs = ENTER_CONFIRM_MS;
+            if (holdCandidate) {
+                // Keep a little memory so one good frame can bridge a brief syllable pause.
+                quietEvidenceMs = Math.max(0L, quietEvidenceMs - frameIntervalMs * 2L);
+            } else {
+                quietEvidenceMs = Math.min(
+                        EXIT_CONFIRM_MS,
+                        quietEvidenceMs + frameIntervalMs);
+            }
+            if (quietEvidenceMs >= EXIT_CONFIRM_MS) {
+                moving = false;
+                enterEvidenceMs = 0L;
+            }
         }
-        if (!moving && positiveFrames >= 2) moving = true;
-        if (moving && negativeFrames >= 5) moving = false;
 
-        return new Reading(openness, movement, range, moving);
+        return new Reading(
+                openness,
+                movement,
+                range,
+                moving,
+                ready,
+                values.size(),
+                minimumSamples,
+                activityScore);
     }
 
     public void reset() {
         values.clear();
-        positiveFrames = 0;
-        negativeFrames = 0;
+        enterEvidenceMs = 0L;
+        quietEvidenceMs = 0L;
+        lastTimestampMs = -1L;
+        syntheticTimestampMs = 0L;
         moving = false;
+    }
+
+    private long frameInterval(long timestampMs) {
+        long interval = lastTimestampMs < 0L
+                ? DEFAULT_FRAME_INTERVAL_MS
+                : timestampMs - lastTimestampMs;
+        lastTimestampMs = timestampMs;
+        if (interval <= 0L) return DEFAULT_FRAME_INTERVAL_MS;
+        return Math.min(MAX_FRAME_INTERVAL_MS, interval);
+    }
+
+    private float timeAdjustedSmoothingAlpha(long frameIntervalMs) {
+        double frameRatio = frameIntervalMs / (double) DEFAULT_FRAME_INTERVAL_MS;
+        return (float) (1.0 - Math.pow(1.0 - SMOOTHING_ALPHA, frameRatio));
     }
 
     public static final class Reading {
@@ -81,12 +163,29 @@ public final class MouthMotionTracker {
         public final float movement;
         public final float range;
         public final boolean isMoving;
+        public final boolean isReady;
+        public final int sampleCount;
+        public final int minimumSamples;
+        public final float activityScore;
 
-        public Reading(float openness, float movement, float range, boolean isMoving) {
+        public Reading(
+                float openness,
+                float movement,
+                float range,
+                boolean isMoving,
+                boolean isReady,
+                int sampleCount,
+                int minimumSamples,
+                float activityScore
+        ) {
             this.openness = openness;
             this.movement = movement;
             this.range = range;
             this.isMoving = isMoving;
+            this.isReady = isReady;
+            this.sampleCount = sampleCount;
+            this.minimumSamples = minimumSamples;
+            this.activityScore = activityScore;
         }
     }
 }
