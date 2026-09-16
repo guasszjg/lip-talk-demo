@@ -13,7 +13,9 @@ import androidx.annotation.Nullable;
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public final class FaceOverlayView extends View {
     private static final int[] FACE_OVAL = {
@@ -34,9 +36,12 @@ public final class FaceOverlayView extends View {
     private final Paint selectedLipPaint = stroke(Color.rgb(250, 204, 21), 7f);
     private final Paint otherFacePaint = stroke(Color.argb(150, 203, 213, 225), 3f);
     private final Paint movingFacePaint = stroke(Color.rgb(74, 222, 128), 4f);
+    private final Paint adminFacePaint = stroke(Color.rgb(251, 191, 36), 7f);
     private final Paint badgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint adminBadgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint badgeTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private List<MultiFaceAnalyzer.FaceReading> faces = new ArrayList<>();
+    private Map<Integer, FaceRecognitionEngine.Match> identities = new HashMap<>();
     private int imageWidth;
     private int imageHeight;
 
@@ -48,6 +53,8 @@ public final class FaceOverlayView extends View {
         super(context, attrs);
         badgePaint.setColor(Color.argb(210, 7, 17, 31));
         badgePaint.setStyle(Paint.Style.FILL);
+        adminBadgePaint.setColor(Color.argb(235, 180, 83, 9));
+        adminBadgePaint.setStyle(Paint.Style.FILL);
         badgeTextPaint.setColor(Color.WHITE);
         badgeTextPaint.setTextSize(dp(14));
         badgeTextPaint.setFakeBoldText(true);
@@ -62,6 +69,12 @@ public final class FaceOverlayView extends View {
 
     public void clear() {
         faces = new ArrayList<>();
+        identities = new HashMap<>();
+        postInvalidate();
+    }
+
+    public void setIdentities(Map<Integer, FaceRecognitionEngine.Match> matches) {
+        identities = new HashMap<>(matches);
         postInvalidate();
     }
 
@@ -77,9 +90,12 @@ public final class FaceOverlayView extends View {
         float offsetY = (getHeight() - imageHeight * scale) / 2f;
 
         for (MultiFaceAnalyzer.FaceReading face : faces) {
-            Paint facePaint = face.isSelected
+            FaceRecognitionEngine.Match identity = identities.get(face.trackId);
+            Paint facePaint = identity != null && identity.isAdmin
+                    ? adminFacePaint
+                    : (face.isSelected
                     ? selectedFacePaint
-                    : (face.isMoving ? movingFacePaint : otherFacePaint);
+                    : (face.isMoving ? movingFacePaint : otherFacePaint));
             drawPath(canvas, face.landmarks, FACE_OVAL, facePaint, scale, offsetX, offsetY);
             if (face.isSelected) {
                 drawPath(canvas, face.landmarks, OUTER_LIPS, selectedLipPaint, scale, offsetX, offsetY);
@@ -119,16 +135,20 @@ public final class FaceOverlayView extends View {
             float offsetY
     ) {
         NormalizedLandmark top = face.landmarks.get(10);
-        String label = face.isSelected
+        FaceRecognitionEngine.Match identity = identities.get(face.trackId);
+        String label = identity != null && identity.isAdmin
+                ? "主人：" + identity.name
+                : (face.isSelected
                 ? "目标 #" + face.trackId
-                : "#" + face.trackId;
+                : "#" + face.trackId);
         float x = top.x() * imageWidth * scale + offsetX;
         float y = top.y() * imageHeight * scale + offsetY - dp(12);
         float textWidth = badgeTextPaint.measureText(label);
         float left = x - textWidth / 2f - dp(7);
         float topY = y - dp(19);
         canvas.drawRoundRect(left, topY, left + textWidth + dp(14), y + dp(5),
-                dp(8), dp(8), badgePaint);
+                dp(8), dp(8), identity != null && identity.isAdmin
+                        ? adminBadgePaint : badgePaint);
         canvas.drawText(label, left + dp(7), y, badgeTextPaint);
     }
 

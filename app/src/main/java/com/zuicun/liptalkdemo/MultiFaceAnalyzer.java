@@ -64,7 +64,7 @@ public final class MultiFaceAnalyzer {
                 tracks.put(track.id, track);
             }
             matchedTrackIds.add(track.id);
-            readings.add(track.update(observation, frameNumber));
+            readings.add(track.update(observation, frameNumber, timestampMs));
         }
         removeExpiredTracks();
 
@@ -172,11 +172,12 @@ public final class MultiFaceAnalyzer {
                     12, 6, motionThreshold, rangeThreshold);
         }
 
-        FaceReading update(Observation observation, int currentFrame) {
+        FaceReading update(Observation observation, int currentFrame, long timestampMs) {
             centerX = observation.centerX;
             centerY = observation.centerY;
             lastSeenFrame = currentFrame;
-            MouthMotionTracker.Reading motion = motionTracker.update(observation.openness);
+            MouthMotionTracker.Reading motion =
+                    motionTracker.update(observation.openness, timestampMs);
             return new FaceReading(
                     observation.sourceIndex,
                     id,
@@ -186,7 +187,11 @@ public final class MultiFaceAnalyzer {
                     observation.centerY,
                     motion.openness,
                     motion.movement,
-                    motion.isMoving);
+                    motion.isMoving,
+                    motion.isReady,
+                    motion.sampleCount,
+                    motion.minimumSamples,
+                    motion.activityScore);
         }
     }
 
@@ -229,11 +234,22 @@ public final class MultiFaceAnalyzer {
             float area = Math.max(0f, maxX - minX) * Math.max(0f, maxY - minY);
             NormalizedLandmark upperLip = landmarks.get(13);
             NormalizedLandmark lowerLip = landmarks.get(14);
+            NormalizedLandmark upperLeftLip = landmarks.get(82);
+            NormalizedLandmark lowerLeftLip = landmarks.get(87);
+            NormalizedLandmark upperRightLip = landmarks.get(312);
+            NormalizedLandmark lowerRightLip = landmarks.get(317);
             NormalizedLandmark leftCorner = landmarks.get(78);
             NormalizedLandmark rightCorner = landmarks.get(308);
             float mouthWidth = distance(leftCorner.x(), leftCorner.y(), rightCorner.x(), rightCorner.y());
             if (area <= 0f || mouthWidth < 0.001f) return null;
-            float mouthHeight = distance(upperLip.x(), upperLip.y(), lowerLip.x(), lowerLip.y());
+            float mouthHeight =
+                    distance(upperLip.x(), upperLip.y(), lowerLip.x(), lowerLip.y()) * 0.50f
+                    + distance(
+                            upperLeftLip.x(), upperLeftLip.y(),
+                            lowerLeftLip.x(), lowerLeftLip.y()) * 0.25f
+                    + distance(
+                            upperRightLip.x(), upperRightLip.y(),
+                            lowerRightLip.x(), lowerRightLip.y()) * 0.25f;
             return new Observation(
                     sourceIndex,
                     landmarks,
@@ -254,6 +270,10 @@ public final class MultiFaceAnalyzer {
         public final float openness;
         public final float movement;
         public final boolean isMoving;
+        public final boolean isReady;
+        public final int sampleCount;
+        public final int minimumSamples;
+        public final float activityScore;
         public float presenceScore;
         public float speakerScore;
         public boolean isSelected;
@@ -267,7 +287,11 @@ public final class MultiFaceAnalyzer {
                 float centerY,
                 float openness,
                 float movement,
-                boolean isMoving
+                boolean isMoving,
+                boolean isReady,
+                int sampleCount,
+                int minimumSamples,
+                float activityScore
         ) {
             this.sourceIndex = sourceIndex;
             this.trackId = trackId;
@@ -278,6 +302,10 @@ public final class MultiFaceAnalyzer {
             this.openness = openness;
             this.movement = movement;
             this.isMoving = isMoving;
+            this.isReady = isReady;
+            this.sampleCount = sampleCount;
+            this.minimumSamples = minimumSamples;
+            this.activityScore = activityScore;
         }
 
         void calculateScores(float maximumArea) {

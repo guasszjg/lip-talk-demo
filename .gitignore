@@ -8,3 +8,10 @@ captures/
 .cxx/
 app/build/
 work/
+outputs/
+__pycache__/
+*.pyc
+# InsightFace official pretrained weights are research-only and must not be published here.
+app/src/main/assets/genderage.onnx
+app/src/main/assets/w600k_mbf.onnx
+app/src/main/assets/*_rk3576_fp16.rknn
