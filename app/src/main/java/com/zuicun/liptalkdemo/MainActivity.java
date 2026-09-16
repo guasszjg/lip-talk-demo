@@ -208,7 +208,10 @@ public final class MainActivity extends ComponentActivity
         backendButton.setOnClickListener(view -> {
             FaceLandmarkerEngine current = engine;
             if (current != null && current.usesRknn()) {
-                Toast.makeText(this, "RK3576 当前固定使用 RKNN NPU", Toast.LENGTH_SHORT).show();
+                Toast.makeText(
+                        this,
+                        RknnPlatform.displayName() + " 当前使用 RKNN NPU",
+                        Toast.LENGTH_SHORT).show();
                 return;
             }
             setInferenceBackend(
@@ -275,6 +278,7 @@ public final class MainActivity extends ComponentActivity
 
     private boolean shouldPlaceStatusAtTop() {
         if (!DevicePlatform.isRockchip()) return false;
+        if (RknnPlatform.isRk3588()) return true;
         int width = getResources().getDisplayMetrics().widthPixels;
         int height = getResources().getDisplayMetrics().heightPixels;
         return height > width * 2;

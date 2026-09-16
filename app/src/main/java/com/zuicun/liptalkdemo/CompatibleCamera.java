@@ -36,7 +36,7 @@ final class CompatibleCamera {
             this.selector = selector;
             this.mirrored = mirrored;
             this.compensateRockchipUsbRotation =
-                    DevicePlatform.isRockchip() && !mirrored;
+                    DevicePlatform.isRockchip() && !mirrored && !RknnPlatform.isRk3588();
         }
 
         int targetRotation() {

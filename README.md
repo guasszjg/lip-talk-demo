@@ -2,6 +2,8 @@
 
 这是一个使用 Java 编写的 Android 端侧视觉验证项目，可运行在三星 Note9（Android 10）和 RK3576 ARM64 Android 设备上。项目通过 CameraX 获取前置摄像头画面，在普通 Android 设备上使用 Google MediaPipe Face Landmarker，在 RK3576 上优先使用 RKNN NPU 人脸检测与关键点模型，再通过自研的嘴部几何特征、连续帧统计和多人目标选择逻辑，判断画面中的目标是否存在持续嘴部运动。
 
+仓库同时包含独立的 [`lipmotionlib`](lipmotionlib/README.md) Android Library：支持Camera1 NV21输入，并可在单独的透明SurfaceView上只绘制黄色嘴唇轮廓，供其他Android项目以AAR方式集成。
+
 项目当前定位是：
 
 > 验证“视觉嘴部运动检测”能否作为智能广告机语音交互入口的一部分。

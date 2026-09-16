@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "LipTalkDemo"
 include(":app")
+include(":lipmotionlib")
+include(":agegenderlib")

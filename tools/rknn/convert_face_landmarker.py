@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract and convert MediaPipe Face Landmarker neural models for RK3576."""
+"""Extract and convert MediaPipe Face Landmarker models for a Rockchip NPU."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from rknn.api import RKNN
 @dataclass(frozen=True)
 class ModelSpec:
     source: str
-    output: str
+    output_stem: str
     mean: list[float]
     std: list[float]
 
@@ -22,14 +22,14 @@ class ModelSpec:
 MODEL_SPECS = (
     ModelSpec(
         source="face_detector.tflite",
-        output="face_detector_rk3576_fp16.rknn",
+        output_stem="face_detector",
         # MediaPipe face detector ImageToTensor output range is [-1, 1].
         mean=[127.5, 127.5, 127.5],
         std=[127.5, 127.5, 127.5],
     ),
     ModelSpec(
         source="face_landmarks_detector.tflite",
-        output="face_landmarks_rk3576_fp16.rknn",
+        output_stem="face_landmarks",
         # MediaPipe face landmark ImageToTensor output range is [0, 1].
         mean=[0.0, 0.0, 0.0],
         std=[255.0, 255.0, 255.0],
@@ -37,14 +37,17 @@ MODEL_SPECS = (
 )
 
 
-def convert(spec: ModelSpec, extracted_dir: Path, output_dir: Path) -> None:
+def convert(
+        spec: ModelSpec, extracted_dir: Path, output_dir: Path,
+        target_platform: str,
+) -> None:
     source = extracted_dir / spec.source
-    destination = output_dir / spec.output
+    destination = output_dir / f"{spec.output_stem}_{target_platform}_fp16.rknn"
     print(f"\n=== Converting {source.name} -> {destination.name} ===")
     rknn = RKNN(verbose=True)
     try:
         result = rknn.config(
-            target_platform="rk3576",
+            target_platform=target_platform,
             mean_values=spec.mean,
             std_values=spec.std,
             optimization_level=3,
@@ -73,6 +76,9 @@ def main() -> None:
     parser.add_argument(
         "--output-dir", type=Path, default=Path.home() / "workspace" / "rknn-output"
     )
+    parser.add_argument(
+        "--target-platform", choices=("rk3576", "rk3588"), default="rk3576"
+    )
     args = parser.parse_args()
     task = args.task.resolve()
     output_dir = args.output_dir.resolve()
@@ -85,8 +91,11 @@ def main() -> None:
             archive.extract(spec.source, extracted_dir)
 
     for spec in MODEL_SPECS:
-        convert(spec, extracted_dir, output_dir)
-    print("\nRK3576 Face Landmarker neural models converted successfully.")
+        convert(spec, extracted_dir, output_dir, args.target_platform)
+    print(
+        f"\n{args.target_platform.upper()} Face Landmarker neural models "
+        "converted successfully."
+    )
 
 
 if __name__ == "__main__":

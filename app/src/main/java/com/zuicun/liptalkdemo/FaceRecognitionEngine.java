@@ -30,7 +30,7 @@ import ai.onnxruntime.OrtSession;
 /** Multi-administrator face embedding and 1:N matching engine for local research testing. */
 public final class FaceRecognitionEngine implements AutoCloseable {
     private static final int INPUT_SIZE = 112;
-    private static final String RKNN_MODEL_FILE = "w600k_mbf_rk3576_fp16.rknn";
+    private static final String RKNN_MODEL_FILE = RknnPlatform.model("w600k_mbf");
     private static final long REFRESH_MS = 650L;
     private static final float MATCH_THRESHOLD = 0.42f;
     private static final float AMBIGUITY_MARGIN = 0.04f;

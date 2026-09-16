@@ -1,4 +1,4 @@
-package com.zuicun.liptalkdemo;
+package com.zuicun.agegender;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -7,9 +7,8 @@ import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 
-import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
-
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
@@ -26,34 +25,36 @@ final class RknnFacePipeline implements AutoCloseable {
     private final RknnSession detector;
     private final RknnSession landmarker;
     private final int maximumFaces;
-    private final float viewportAspect;
+    private float lastMaximumDetectorScore;
+    private int lastDetectorCandidates;
+    private int lastSelectedDetections;
+    private int lastLandmarkSuccesses;
 
     static RknnFacePipeline tryCreate(Context context, int maximumFaces) {
         RknnSession detector = RknnSession.tryCreate(
-                context, RknnPlatform.model("face_detector"), 896 * 16, 896);
+                context, "face_detector_rk3588_fp16.rknn", 896 * 16, 896);
         if (detector == null) return null;
         RknnSession landmarker = RknnSession.tryCreate(
-                context, RknnPlatform.model("face_landmarks"), 1434, 1, 1);
+                context, "face_landmarks_rk3588_fp16.rknn", 1434, 1, 1);
         if (landmarker == null) {
             detector.close();
             return null;
         }
-        return new RknnFacePipeline(context, detector, landmarker, maximumFaces);
+        return new RknnFacePipeline(detector, landmarker, maximumFaces);
     }
 
     private RknnFacePipeline(
-            Context context, RknnSession detector, RknnSession landmarker, int maximumFaces
+            RknnSession detector, RknnSession landmarker, int maximumFaces
     ) {
-        viewportAspect = context.getResources().getDisplayMetrics().widthPixels
-                / (float) context.getResources().getDisplayMetrics().heightPixels;
         this.detector = detector;
         this.landmarker = landmarker;
         this.maximumFaces = maximumFaces;
     }
 
-    List<List<NormalizedLandmark>> detect(Bitmap frame) {
+    List<List<FaceLandmark>> detect(Bitmap frame) {
         List<Detection> detections = new ArrayList<>();
-        for (DetectorInput input : prepareDetectorInputs(frame, viewportAspect)) {
+        lastMaximumDetectorScore = 0f;
+        for (DetectorInput input : prepareDetectorInputs(frame)) {
             float[][] detectorOutputs;
             try {
                 detectorOutputs = detector.runAll(toRgb(input.bitmap));
@@ -62,21 +63,36 @@ final class RknnFacePipeline implements AutoCloseable {
             }
             float[] regressors = findOutput(detectorOutputs, 896 * 16);
             float[] scores = findOutput(detectorOutputs, 896);
+            lastMaximumDetectorScore = Math.max(
+                    lastMaximumDetectorScore, maximumDetectorScore(scores));
             detections.addAll(decodeDetections(
                     regressors, scores, input, frame.getWidth(), frame.getHeight()));
+            // The common single-face case should not pay for every fallback tile once
+            // a usable face has already been found.
+            if (maximumFaces == 1 && !detections.isEmpty()) break;
         }
+        lastDetectorCandidates = detections.size();
         detections = suppressOverlaps(detections);
+        lastSelectedDetections = detections.size();
 
-        List<List<NormalizedLandmark>> faces = new ArrayList<>();
+        List<List<FaceLandmark>> faces = new ArrayList<>();
         for (Detection detection : detections) {
-            List<NormalizedLandmark> landmarks = runLandmarks(frame, detection);
+            List<FaceLandmark> landmarks = runLandmarks(frame, detection);
             if (landmarks != null) faces.add(landmarks);
             if (faces.size() >= maximumFaces) break;
         }
+        lastLandmarkSuccesses = faces.size();
         return faces;
     }
 
-    private List<NormalizedLandmark> runLandmarks(Bitmap frame, Detection detection) {
+    String diagnostics() {
+        return "detectorMax=" + String.format(java.util.Locale.US, "%.3f", lastMaximumDetectorScore)
+                + ", candidates=" + lastDetectorCandidates
+                + ", selected=" + lastSelectedDetections
+                + ", landmarks=" + lastLandmarkSuccesses;
+    }
+
+    private List<FaceLandmark> runLandmarks(Bitmap frame, Detection detection) {
         float centerX = detection.centerX * frame.getWidth();
         float centerY = detection.centerY * frame.getHeight();
         float roiSize = Math.max(
@@ -121,7 +137,7 @@ final class RknnFacePipeline implements AutoCloseable {
 
         Matrix roiToFrame = new Matrix();
         if (!frameToRoi.invert(roiToFrame)) return null;
-        List<NormalizedLandmark> result = new ArrayList<>(478);
+        List<FaceLandmark> result = new ArrayList<>(478);
         float[] point = new float[2];
         for (int index = 0; index < 478; index++) {
             point[0] = rawLandmarks[index * 3];
@@ -131,29 +147,29 @@ final class RknnFacePipeline implements AutoCloseable {
             float y = point[1] / frame.getHeight();
             float z = rawLandmarks[index * 3 + 2]
                     / LANDMARK_SIZE * roiSize / frame.getWidth();
-            result.add(NormalizedLandmark.create(x, y, z));
+            result.add(new FaceLandmark(x, y, z));
         }
         return result;
     }
 
-    private static List<DetectorInput> prepareDetectorInputs(
-            Bitmap frame, float viewportAspect
-    ) {
+    private static List<DetectorInput> prepareDetectorInputs(Bitmap frame) {
         int width = frame.getWidth();
         int height = frame.getHeight();
-        List<DetectorInput> inputs = new ArrayList<>(3);
+        List<DetectorInput> inputs = new ArrayList<>(4);
         inputs.add(prepareDetectorInput(frame, 0, 0, width, height));
-        float frameAspect = width / (float) height;
-        if (Math.abs(frameAspect - viewportAspect) < 0.15f) return inputs;
 
         int tileSize = Math.round(Math.min(width, height) * 2f / 3f);
-        if (frameAspect > viewportAspect) {
+        if (height >= width) {
             int left = (width - tileSize) / 2;
+            inputs.add(prepareDetectorInput(
+                    frame, left, (height - tileSize) / 2, tileSize, tileSize));
             inputs.add(prepareDetectorInput(frame, left, 0, tileSize, tileSize));
             inputs.add(prepareDetectorInput(
                     frame, left, height - tileSize, tileSize, tileSize));
         } else {
             int top = (height - tileSize) / 2;
+            inputs.add(prepareDetectorInput(
+                    frame, (width - tileSize) / 2, top, tileSize, tileSize));
             inputs.add(prepareDetectorInput(frame, 0, top, tileSize, tileSize));
             inputs.add(prepareDetectorInput(
                     frame, width - tileSize, top, tileSize, tileSize));
@@ -215,7 +231,12 @@ final class RknnFacePipeline implements AutoCloseable {
     }
 
     private static List<Detection> suppressOverlaps(List<Detection> candidates) {
-        candidates.sort(Comparator.comparingDouble((Detection item) -> item.score).reversed());
+        Collections.sort(candidates, new Comparator<Detection>() {
+            @Override
+            public int compare(Detection first, Detection second) {
+                return Float.compare(second.score, first.score);
+            }
+        });
         List<Detection> selected = new ArrayList<>();
         for (Detection candidate : candidates) {
             boolean overlaps = false;
@@ -329,6 +350,16 @@ final class RknnFacePipeline implements AutoCloseable {
 
     private static float sigmoid(float value) {
         return (float) (1d / (1d + Math.exp(-value)));
+    }
+
+    private static float maximumDetectorScore(float[] rawScores) {
+        if (rawScores == null || rawScores.length == 0) return 0f;
+        float maximum = 0f;
+        for (float rawScore : rawScores) {
+            maximum = Math.max(maximum,
+                    sigmoid(Math.max(-100f, Math.min(100f, rawScore))));
+        }
+        return maximum;
     }
 
     private static float rotateX(

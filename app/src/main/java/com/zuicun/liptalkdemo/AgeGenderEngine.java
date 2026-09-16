@@ -30,7 +30,7 @@ import ai.onnxruntime.OrtSession;
  */
 public final class AgeGenderEngine implements AutoCloseable {
     private static final String MODEL_FILE = "genderage.onnx";
-    private static final String RKNN_MODEL_FILE = "genderage_rk3576_fp16.rknn";
+    private static final String RKNN_MODEL_FILE = RknnPlatform.model("genderage");
     private static final int INPUT_SIZE = 96;
     private static final int INFERENCE_VIEWS = 2;
     private static final long REFRESH_INTERVAL_MS = 1000L;

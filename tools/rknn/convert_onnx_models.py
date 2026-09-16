@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert LipTalkDemo ONNX models to FP16 RKNN models for RK3576."""
+"""Convert LipTalkDemo ONNX models to FP16 RKNN models for a Rockchip NPU."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from rknn.api import RKNN
 @dataclass(frozen=True)
 class ModelSpec:
     source: str
-    output: str
+    output_stem: str
     input_name: str
     input_shape: list[int]
     mean: list[float]
@@ -23,7 +23,7 @@ class ModelSpec:
 MODEL_SPECS = (
     ModelSpec(
         source="w600k_mbf.onnx",
-        output="w600k_mbf_rk3576_fp16.rknn",
+        output_stem="w600k_mbf",
         input_name="input.1",
         input_shape=[1, 3, 112, 112],
         mean=[127.5, 127.5, 127.5],
@@ -31,7 +31,7 @@ MODEL_SPECS = (
     ),
     ModelSpec(
         source="genderage.onnx",
-        output="genderage_rk3576_fp16.rknn",
+        output_stem="genderage",
         input_name="data",
         input_shape=[1, 3, 96, 96],
         # genderage.onnx contains its own Sub/Mul normalization.
@@ -41,9 +41,11 @@ MODEL_SPECS = (
 )
 
 
-def convert(spec: ModelSpec, models_dir: Path, output_dir: Path) -> None:
+def convert(
+        spec: ModelSpec, models_dir: Path, output_dir: Path, target_platform: str
+) -> None:
     source = models_dir / spec.source
-    destination = output_dir / spec.output
+    destination = output_dir / f"{spec.output_stem}_{target_platform}_fp16.rknn"
     if not source.is_file():
         raise FileNotFoundError(source)
 
@@ -51,7 +53,7 @@ def convert(spec: ModelSpec, models_dir: Path, output_dir: Path) -> None:
     rknn = RKNN(verbose=True)
     try:
         result = rknn.config(
-            target_platform="rk3576",
+            target_platform=target_platform,
             mean_values=spec.mean,
             std_values=spec.std,
             optimization_level=3,
@@ -89,12 +91,18 @@ def main() -> None:
     parser.add_argument(
         "--output-dir", type=Path, default=Path.home() / "workspace" / "rknn-output"
     )
+    parser.add_argument(
+        "--target-platform", choices=("rk3576", "rk3588"), default="rk3576"
+    )
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     for spec in MODEL_SPECS:
-        convert(spec, args.models_dir.resolve(), args.output_dir.resolve())
-    print("\nAll RK3576 FP16 models converted successfully.")
+        convert(
+            spec, args.models_dir.resolve(), args.output_dir.resolve(),
+            args.target_platform,
+        )
+    print(f"\nAll {args.target_platform.upper()} FP16 models converted successfully.")
 
 
 if __name__ == "__main__":
